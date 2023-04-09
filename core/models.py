@@ -16,7 +16,7 @@ def create_models(opt, recommended_config):
     config_G, config_D = prepare_config(opt, recommended_config)
 
     # --- generator and EMA --- #
-    netG = Generator(config_G).to(opt.device)
+    netG = Generator(config_G,opt.attention_type).to(opt.device)
     netG.apply(weights_init)
     netEMA = copy.deepcopy(netG) if not opt.no_EMA else None
 
@@ -91,7 +91,7 @@ def get_channels(which_net, base_multipler):
 
 
 class Generator(nn.Module):
-    def __init__(self, config_G):
+    def __init__(self, config_G ,bblock):
         super(Generator, self).__init__()
         self.num_blocks = config_G["num_blocks_g"]
         self.noise_shape = config_G["noise_shape"]
@@ -102,7 +102,7 @@ class Generator(nn.Module):
         num_of_channels = get_channels("Generator", config_G["ch_G"])[-self.num_blocks-1:]
 
 
-        self.bblock=config_G["attention_type"]
+        self.bblock=bblock
 
         self.body, self.rgb_converters = nn.ModuleList([]), nn.ModuleList([])
         self.first_linear = nn.ConvTranspose2d(self.noise_init_dim, num_of_channels[0], self.noise_shape)
