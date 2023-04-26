@@ -30,7 +30,24 @@ class Content_FA(nn.Module):
                 ans[i, ch_first, :, :] = lam*y[i, ch_first, :, :].clone()+(1-lam)*y[i + 1, ch_first, :, :].clone()
                 ans[i + 1, ch_first, :, :] = lam*y[i + 1, ch_first, :, :].clone()+(1-lam)* y[i, ch_first, :, :].clone()
         return ans
-
+    
+    def mix(self, y):
+        """
+        Randomly swap channels of different instances
+        """
+        bs = y.shape[0]
+        ch = y.shape[1]
+        ans = y
+        # ---  --- #
+        if random.random() < self.prob:
+            for i in range(0, bs - 1, 2):
+                num_first = int(ch * (torch.rand(1) * (self.ranges[1]-self.ranges[0]) + self.ranges[0]))
+                perm = torch.randperm(ch)
+                ch_first = perm[:num_first]
+                ans[i, ch_first, :, :] = y[i + 1, ch_first, :, :].clone()
+                ans[i + 1, ch_first, :, :] = y[i, ch_first, :, :].clone()
+        return ans
+    
     def drop(self, y):
         """
         Randomly zero out channels
@@ -92,7 +109,7 @@ class Layout_FA(nn.Module):
         """
         ans_y = y.clone()
         ans_mask = mask.clone()
-        ans_y, ans_mask = self.mix_up_background(ans_y, ans_mask)
+        ans_y, ans_mask = self.mix_background(ans_y, ans_mask)
         ans_y, ans_mask = self.swap(ans_y, ans_mask)
         ans_y, ans_mask = self.move_objects(ans_y, ans_mask)
         return ans_y
@@ -125,8 +142,37 @@ class Layout_FA(nn.Module):
                     mask[i, :, x0_1:x0_2, y0_1:y0_2] = lam*mask[i, :, x1_1:x1_2, y1_1:y1_2].clone() +(1-lam) * mask[i+1, :, x1_1:x1_2, y1_1:y1_2].clone()
         return y, mask
 
+    
 
     def swap(self, y, mask_):
+        """
+        Copy-paste background and objects into other areas, without cutting semantic boundaries
+        """
+        ans = y.clone()
+        mask = mask_.clone()
+        for i in range(0, y.shape[0] - 1, 2):
+            if random.random() < self.prob:
+                for jj in range(5):
+                    x1, x2, y1, y2 = gen_rectangle(y)
+                    rect = x1, x2, y1, y2
+                    if any_object_touched(rect, mask[i:i + 1]) or any_object_touched(rect, mask[i + 1:i + 2]):
+                        continue
+                    else:
+                        ans[i, :, x1:x2, y1:y2] = y[i + 1, :, x1:x2, y1:y2].clone()
+                        ans[i + 1, :, x1:x2, y1:y2] = y[i, :, x1:x2, y1:y2].clone()
+                        mem = mask_[i, :, x1:x2, y1:y2].clone()
+                        mask[i, :, x1:x2, y1:y2] = mask_[i + 1, :, x1:x2, y1:y2].clone()
+                        mask[i + 1, :, x1:x2, y1:y2] = mem
+                        break
+            if random.random() < self.prob:
+                which_object = torch.randint(mask.shape[1] - 1, size=()) + 1
+                old_area = torch.argmax(mask[i], dim=0, keepdim=False) == which_object
+                if not area_cut_any_object(old_area, mask[i + 1]):
+                    ans[i+1] = ans[i].clone() * (old_area * 1.0) + ans[i+1].clone() * (1 - old_area * 1.0)
+                    mask[i+1] = mask[i] * (old_area * 1.0) + mask[i+1] * (1 - old_area * 1.0)
+        return ans, mask
+
+    def swap_up(self, y, mask_):
         """
         Copy-paste background and objects into other areas, without cutting semantic boundaries
         """
