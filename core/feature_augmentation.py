@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import random
-
+import numpy as np
 
 class Content_FA(nn.Module):
     def __init__(self, no_mask, prob_FA_con, num_mask_channels=None):
@@ -12,21 +12,23 @@ class Content_FA(nn.Module):
         if not self.no_mask:
             self.num_mask_channels = num_mask_channels
 
-    def mix(self, y):
+    def mix_up(self, y):
         """
-        Randomly swap channels of different instances
+        Randomly swap channels of different instances using mixup method
         """
         bs = y.shape[0]
         ch = y.shape[1]
         ans = y
+        alpha=1
         # ---  --- #
         if random.random() < self.prob:
             for i in range(0, bs - 1, 2):
                 num_first = int(ch * (torch.rand(1) * (self.ranges[1]-self.ranges[0]) + self.ranges[0]))
                 perm = torch.randperm(ch)
                 ch_first = perm[:num_first]
-                ans[i, ch_first, :, :] = y[i + 1, ch_first, :, :].clone()
-                ans[i + 1, ch_first, :, :] = y[i, ch_first, :, :].clone()
+                lam = torch.tensor(np.random.beta(alpha, alpha)).float()
+                ans[i, ch_first, :, :] = lam*y[i, ch_first, :, :].clone()+(1-lam)*y[i + 1, ch_first, :, :].clone()
+                ans[i + 1, ch_first, :, :] = lam*y[i + 1, ch_first, :, :].clone()+(1-lam)* y[i, ch_first, :, :].clone()
         return ans
 
     def drop(self, y):
@@ -90,7 +92,7 @@ class Layout_FA(nn.Module):
         """
         ans_y = y.clone()
         ans_mask = mask.clone()
-        ans_y, ans_mask = self.mix_background(ans_y, ans_mask)
+        ans_y, ans_mask = self.mix_up_background(ans_y, ans_mask)
         ans_y, ans_mask = self.swap(ans_y, ans_mask)
         ans_y, ans_mask = self.move_objects(ans_y, ans_mask)
         return ans_y
@@ -108,6 +110,21 @@ class Layout_FA(nn.Module):
                     y[i, :, x0_1:x0_2, y0_1:y0_2] = y[i, :, x1_1:x1_2, y1_1:y1_2].clone()
                     mask[i, :, x0_1:x0_2, y0_1:y0_2] = mask[i, :, x1_1:x1_2, y1_1:y1_2].clone()
         return y, mask
+    
+    def mix_up_background(self,y,mask):
+        for i in range(5):
+            alpha=1
+            lam = torch.tensor(np.random.beta(alpha, alpha)).float()
+
+            if random.random() < self.prob:
+                rect1, rect2 = gen_nooverlap_rectangles(y, mask)
+                if rect1[0] is not None:
+                    x0_1, x0_2, y0_1, y0_2 = rect1
+                    x1_1, x1_2, y1_1, y1_2 = rect2
+                    y[i, :, x0_1:x0_2, y0_1:y0_2] = lam*y[i, :, x1_1:x1_2, y1_1:y1_2].clone() + (1-lam)*y[i+1, :, x1_1:x1_2, y1_1:y1_2].clone()
+                    mask[i, :, x0_1:x0_2, y0_1:y0_2] = lam*mask[i, :, x1_1:x1_2, y1_1:y1_2].clone() +(1-lam) * mask[i+1, :, x1_1:x1_2, y1_1:y1_2].clone()
+        return y, mask
+
 
     def swap(self, y, mask_):
         """
@@ -115,7 +132,10 @@ class Layout_FA(nn.Module):
         """
         ans = y.clone()
         mask = mask_.clone()
+        alpha=1
+        lam = torch.tensor(np.random.beta(alpha, alpha)).float()
         for i in range(0, y.shape[0] - 1, 2):
+
             if random.random() < self.prob:
                 for jj in range(5):
                     x1, x2, y1, y2 = gen_rectangle(y)
@@ -123,11 +143,12 @@ class Layout_FA(nn.Module):
                     if any_object_touched(rect, mask[i:i + 1]) or any_object_touched(rect, mask[i + 1:i + 2]):
                         continue
                     else:
-                        ans[i, :, x1:x2, y1:y2] = y[i + 1, :, x1:x2, y1:y2].clone()
-                        ans[i + 1, :, x1:x2, y1:y2] = y[i, :, x1:x2, y1:y2].clone()
+
+                        ans[i, :, x1:x2, y1:y2] = lam*y[i, :, x1:x2, y1:y2].clone()+(1-lam)*y[i + 1, :, x1:x2, y1:y2].clone()
+                        ans[i + 1, :, x1:x2, y1:y2] = lam*y[i + 1, :, x1:x2, y1:y2].clone()+(1-lam)*y[i, :, x1:x2, y1:y2].clone()
                         mem = mask_[i, :, x1:x2, y1:y2].clone()
-                        mask[i, :, x1:x2, y1:y2] = mask_[i + 1, :, x1:x2, y1:y2].clone()
-                        mask[i + 1, :, x1:x2, y1:y2] = mem
+                        mask[i, :, x1:x2, y1:y2] = lam*mask_[i, :, x1:x2, y1:y2].clone()+(1-lam)*mask_[i + 1, :, x1:x2, y1:y2].clone()
+                        mask[i + 1, :, x1:x2, y1:y2] = (1-lam)*mask_[i, :, x1:x2, y1:y2].clone()+lam*mask_[i + 1, :, x1:x2, y1:y2].clone()
                         break
             if random.random() < self.prob:
                 which_object = torch.randint(mask.shape[1] - 1, size=()) + 1

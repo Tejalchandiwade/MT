@@ -394,7 +394,7 @@ class Discriminator(nn.Module):
         for i in range(self.num_blocks_ll, self.num_blocks):
             k = i - self.num_blocks_ll
             in_channels = 1 if k > 0 else num_of_channels[i]
-            cur_block_layout = D_block(in_channels, 1, self.norm_name)
+            cur_block_layout = D_block_spatial(in_channels, 1, self.norm_name)
             self.body_layout.append(cur_block_layout)
             self.final_layout.append(to_decision(1, 1))
         print("Created Discriminator (%d+%d blocks) with %d parameters" %
@@ -480,6 +480,43 @@ class D_block(nn.Module):
         x = self.conv2(x)
         if not x.shape[0] == 0:
             x = self.down(x)
+        h = self.conv_sc(h)
+        if not x.shape[0] == 0:
+            h = self.down(h)
+        return x + h
+    
+
+class D_block_spatial(nn.Module):
+    def __init__(self, in_channel, out_channel, norm_name, is_first=False, only_content=False):
+        super(D_block, self).__init__()
+        middle_channel = min(in_channel, out_channel)
+        ker_size, padd_size = (1, 0) if only_content else (3, 1)
+        self.is_first = is_first
+        self.activ = nn.LeakyReLU(0.2)
+        self.conv1 = sp_norm(nn.Conv2d(in_channel, middle_channel, ker_size, padding=padd_size))
+        self.conv2 = sp_norm(nn.Conv2d(middle_channel, out_channel, ker_size, padding=padd_size))
+        self.norm1 = get_norm_by_name(norm_name, in_channel)
+        self.norm2 = get_norm_by_name(norm_name, middle_channel)
+        self.down = nn.AvgPool2d(2) if not only_content else torch.nn.Identity()
+        self.spatialAtt = SpatialAttention()
+        learned_sc = in_channel != out_channel or not only_content
+        if learned_sc:
+            self.conv_sc = sp_norm(nn.Conv2d(in_channel, out_channel, (1, 1), bias=False))
+        else:
+            self.conv_sc = torch.nn.Identity()
+            
+    def forward(self, x):
+        h = x
+        if not self.is_first:
+            x = self.norm1(x)
+            x = self.activ(x)
+        x = self.conv1(x)
+        x = self.norm2(x)
+        x = self.activ(x)
+        x = self.conv2(x)
+        if not x.shape[0] == 0:
+            x = self.down(x)
+        x = self.spatialAtt(x) * x
         h = self.conv_sc(h)
         if not x.shape[0] == 0:
             h = self.down(h)
